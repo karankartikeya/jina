@@ -1,16 +1,51 @@
-from .base.http import HTTPBaseClient
-from .mixin import AsyncPostMixin, PostMixin
+from jina.clients.base.http import HTTPBaseClient
+from jina.clients.mixin import (
+    AsyncHealthCheckMixin,
+    AsyncMutateMixin,
+    AsyncPostMixin,
+    AsyncProfileMixin,
+    HealthCheckMixin,
+    MutateMixin,
+    PostMixin,
+    ProfileMixin,
+)
+import asyncio
 
 
-class HTTPClient(HTTPBaseClient, PostMixin):
+class HTTPClient(
+    HTTPBaseClient, PostMixin, ProfileMixin, MutateMixin, HealthCheckMixin
+):
+    """A client connecting to a Gateway using gRPC protocol.
+
+    Instantiate this class through the :meth:`jina.Client` convenience method.
+
+    EXAMPLE USAGE
+
+    .. code-block:: python
+
+        from jina import Client
+        from docarray import Document
+
+        # select host address to connect to
+        c = Client(
+            protocol='http', asyncio=False, host='http://my.awesome.flow:1234'
+        )  # returns HTTPClient instance
+        c.post(on='/index', inputs=Document(text='hello!'))
+
     """
-    A client communicates the server with HTTP protocol.
-    """
 
 
-class AsyncHTTPClient(HTTPBaseClient, AsyncPostMixin):
+class AsyncHTTPClient(
+    HTTPBaseClient,
+    AsyncPostMixin,
+    AsyncMutateMixin,
+    AsyncProfileMixin,
+    AsyncHealthCheckMixin,
+):
     """
-    A client communicates the server with HTTP protocol.
+    Asynchronous client connecting to a Gateway using HTTP protocol.
+
+    Instantiate this class through the :meth:`jina.Client` convenience method.
 
     Unlike :class:`HTTPClient`, here :meth:`post` is a coroutine (i.e. declared with the async/await syntax),
     simply calling them will not schedule them to be executed.
@@ -23,4 +58,31 @@ class AsyncHTTPClient(HTTPBaseClient, AsyncPostMixin):
     In this case, users often do not want to let Jina control the ``asyncio.eventloop``. On contrary, :class:`Client`
     is controlling and wrapping the event loop internally, making the Client looks synchronous from outside.
 
+    EXAMPLE USAGE
+
+    .. code-block:: python
+
+        from jina import Client
+        from docarray import Document
+
+        # async inputs for the client
+        async def async_inputs():
+            for _ in range(10):
+                yield Document()
+                await asyncio.sleep(0.1)
+
+
+        # select host address to connect to
+        c = Client(
+            protocol='http', asyncio=True, host='http://my.awesome.flow:1234'
+        )  # returns AsyncHTTPClient instance
+
+        async for resp in client.post(on='/index', async_inputs, request_size=1):
+            print(resp)
+
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._lock = asyncio.Lock()
+        self.reuse_session = self.args.reuse_session

@@ -1,6 +1,9 @@
 """Argparser module for Flow"""
-from .base import set_base_parser
-from .helper import add_arg_group, KVAppendAction
+
+from jina.parsers.base import set_base_parser
+from jina.parsers.helper import KVAppendAction, add_arg_group
+from jina.parsers.orchestrate.base import mixin_essential_parser
+from jina.parsers.logging import mixin_suppress_root_logging_parser
 
 
 def mixin_flow_features_parser(parser):
@@ -8,11 +11,25 @@ def mixin_flow_features_parser(parser):
 
     :param parser: the parser configure
     """
-    from ..enums import FlowInspectType
+    from jina.enums import FlowInspectType
 
     gp = add_arg_group(parser, title='Flow Feature')
 
-    gp.add_argument('--uses', type=str, help='The YAML file represents a flow')
+    gp.add_argument(
+        '--uses',
+        type=str,
+        help='The YAML path represents a flow. It can be either a local file path or a URL.',
+    )
+
+    gp.add_argument(
+        '--reload',
+        action='store_true',
+        default=False,
+        help='If set, auto-reloading on file changes is enabled: the Flow will restart while blocked if  YAML '
+        'configuration source is changed. This also applies apply to underlying Executors, if their source '
+        'code or YAML configuration has changed.',
+    )
+
     gp.add_argument(
         '--env',
         action=KVAppendAction,
@@ -27,37 +44,25 @@ def mixin_flow_features_parser(parser):
         choices=list(FlowInspectType),
         default=FlowInspectType.COLLECT,
         help='''
-    The strategy on those inspect pods in the flow.
+    The strategy on those inspect deployments in the flow.
 
-    If `REMOVE` is given then all inspect pods are removed when building the flow.
+    If `REMOVE` is given then all inspect deployments are removed when building the flow.
     ''',
     )
 
-    gp.add_argument(
-        '--static-routing-table',
-        action='store_true',
-        default=False,
-        help='Defines if the routing table should be pre computed by the Flow. In this case it is statically defined for each Pod and not send on every data request.'
-        ' Can not be used in combination with external pods',
-    )
 
-
-def set_flow_parser(parser=None, with_identity=False):
+def set_flow_parser(parser=None):
     """Set the parser for the flow
 
     :param parser: an (optional) initial parser to build upon
-    :param with_identity: if to include identity in the parser
     :return: the parser
     """
-    from .peapods.base import mixin_base_ppr_parser
 
     if not parser:
         parser = set_base_parser()
 
-    mixin_base_ppr_parser(parser, with_identity=with_identity)
-
-    parser.set_defaults(workspace='./')
-
+    mixin_essential_parser(parser)
+    mixin_suppress_root_logging_parser(parser)
     mixin_flow_features_parser(parser)
 
     return parser

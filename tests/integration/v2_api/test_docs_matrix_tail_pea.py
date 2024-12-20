@@ -1,8 +1,10 @@
-import pytest
 from collections import OrderedDict
-from jina import Document, DocumentArray, Executor, Flow, requests
-from jina.types.document.multimodal import MultimodalDocument
-from jina.types.arrays.chunk import ChunkArray
+
+import pytest
+from docarray.array.chunk import ChunkArray
+
+from jina import Client, Document, DocumentArray, Executor, Flow, requests
+from jina.helper import random_port
 
 
 class DummyExecutor(Executor):
@@ -51,45 +53,47 @@ class ChunkMerger(Executor):
 
 @pytest.mark.timeout(60)
 @pytest.mark.parametrize('num_replicas, num_shards', [(1, 1), (2, 2)])
-def test_sharding_tail_pea(num_replicas, num_shards):
+def test_sharding_tail_pod(num_replicas, num_shards):
     """TODO(Maximilian): Make (1, 2) and (2, 1) also workable"""
-
-    f = Flow().add(
+    port = random_port()
+    f = Flow(port=port).add(
         uses=DummyExecutor,
         replicas=num_replicas,
         shards=num_shards,
         uses_after=MatchMerger,
     )
     with f:
-        results = f.post(
-            on='/search',
-            inputs=Document(matches=[Document()]),
-            return_results=True,
+        results = Client(port=f.port).post(
+            on='/search', inputs=Document(matches=[Document()]), return_responses=True
         )
-        assert len(results[0].docs[0].matches) == num_shards
+    assert len(results[0].docs[0].matches) == num_shards
 
 
-def test_merging_head_pea():
+def test_merging_head_pod():
+    port = random_port()
+
     def multimodal_generator():
         for i in range(0, 5):
-            document = MultimodalDocument(modality_content_map={'1': '1', '2': '2'})
+            document = Document()
+            document.chunks.append(Document(modality='1', content='1'))
+            document.chunks.append(Document(modality='2', content='2'))
             yield document
 
     f = (
-        Flow()
-        .add(uses={'jtype': 'DummyExecutor', 'with': {'mode': '1'}}, name='pod1')
+        Flow(port=port)
+        .add(uses={'jtype': 'DummyExecutor', 'with': {'mode': '1'}}, name='executor1')
         .add(
             uses={'jtype': 'DummyExecutor', 'with': {'mode': '2'}},
-            name='pod2',
+            name='executor2',
             needs='gateway',
         )
-        .add(uses_before=ChunkMerger, name='pod3', needs=['pod1', 'pod2'])
+        .add(
+            uses_before=ChunkMerger, name='executor3', needs=['executor1', 'executor2']
+        )
     )
     with f:
-        results = f.post(
-            on='/search',
-            inputs=multimodal_generator(),
-            return_results=True,
+        results = Client(port=f.port).post(
+            on='/search', inputs=multimodal_generator(), return_responses=True
         )
-        assert len(results[0].docs[0].chunks) == 2
-        assert len(results[0].docs) == 5
+    assert len(results[0].docs[0].chunks) == 2
+    assert len(results[0].docs) == 5

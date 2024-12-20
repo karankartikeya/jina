@@ -1,14 +1,17 @@
-sphinx==3.5.3
-sphinx-argparse==0.2.5
+# cf. https://github.com/ryanfox/sphinx-markdown-tables/issues/36
+sphinx
+sphinx-argparse==0.3.1
 sphinxcontrib-apidoc==0.3.0
-sphinx-autodoc-typehints==1.11.1
-sphinx_rtd_theme==0.5.2
-recommonmark==0.7.1
-sphinx_markdown_tables==0.0.15
-sphinx_copybutton==0.3.1
-sphinx-notfound-page==0.6
-gitpython==3.1.13
-sphinx-sitemap==2.2.0
+sphinxcontrib-redirects==0.1.0
+sphinx-autodoc-typehints==1.18.3
+sphinx_copybutton
+sphinx-notfound-page==0.7.1
+gitpython==3.1.41
+sphinx-sitemap==2.5.0
 sphinxext-opengraph
 furo
-
+myst-parser
+sphinx-design
+sphinx-inline-tabs
+# sphinx-multiversion
+git+https://github.com/Holzhaus/sphinx-multiversion.git

@@ -1,5 +1,5 @@
 # !!! An ARG declared before a FROM is outside of a build stage, so it can’t be used in any instruction after a FROM
-ARG PY_VERSION=3.7
+ARG PY_VERSION=3.10
 
 FROM python:${PY_VERSION}-slim AS jina_dep
 
@@ -24,23 +24,27 @@ ARG PIP_INSTALL_PERF
 LABEL org.opencontainers.image.vendor="Jina AI Limited" \
       org.opencontainers.image.licenses="Apache 2.0" \
       org.opencontainers.image.title="Jina" \
-      org.opencontainers.image.description="Cloud-native neural search framework for any kind of data" \
+      org.opencontainers.image.description="Build multimodal AI services via cloud native technologies" \
       org.opencontainers.image.authors="hello@jina.ai" \
       org.opencontainers.image.url="https://github.com/jina-ai/jina" \
-      org.opencontainers.image.documentation="https://docs.jina.ai"
+      org.opencontainers.image.documentation="https://jina.ai/serve"
 
 # constant, wont invalidate cache
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    JINA_PIP_INSTALL_CORE=PIP_INSTALL_CORE \
-    JINA_PIP_INSTALL_PERF=PIP_INSTALL_PERF
+    JINA_PIP_INSTALL_CORE=${PIP_INSTALL_CORE} \
+    JINA_PIP_INSTALL_PERF=${PIP_INSTALL_PERF}
 
 # change on extra-requirements.txt, setup.py will invalid the cache
 COPY extra-requirements.txt setup.py /tmp/
 
+
 RUN cd /tmp/ && \
-    # apt package should be install before pypi package
-    if [ -n "${APT_PACKAGES}" ]; then apt-get update && apt-get install --no-install-recommends -y ${APT_PACKAGES}; fi && \
+    # apt latest security packages should be install before pypi package
+    if [ -n "${APT_PACKAGES}" ]; then apt-get update && apt-get upgrade -y && \
+    apt-get --only-upgrade install openssl -y && \
+    apt-get install --no-install-recommends -y ${APT_PACKAGES}; fi && \
+    if [ $PY_VERSION==3.11 ]; then apt-get install --no-install-recommends -y build-essential ; fi && \
     if [ -n "${PIP_TAG}" ]; then pip install --default-timeout=1000 --compile --extra-index-url $PIP_EXTRA_INDEX_URL ".[${PIP_TAG}]" ; fi && \
     pip install --default-timeout=1000 --compile --extra-index-url ${PIP_EXTRA_INDEX_URL} . && \
     # now remove apt packages
@@ -71,14 +75,4 @@ RUN cd /jina && \
 
 ENTRYPOINT ["jina"]
 
-FROM jina AS jina_daemon
-
-ARG APT_PACKAGES="gcc libc-dev make"
-
-RUN apt-get update && apt-get install --no-install-recommends -y git ruby-dev ${APT_PACKAGES} && \
-    gem install fluentd --no-doc && \
-    apt-get remove -y --auto-remove ${APT_PACKAGES} && \
-    apt-get autoremove && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-ENTRYPOINT ["jinad"]
 

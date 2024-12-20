@@ -1,4 +1,4 @@
-ac_file = '../cli/autocomplete.py'
+ac_file = '../jina_cli/autocomplete.py'
 
 
 def _update_autocomplete():
@@ -24,7 +24,7 @@ def _update_autocomplete():
     cmd = compl.pop('')
     compl = {'commands': cmd, 'completions': compl}
 
-    with open(ac_file, 'w') as fp:
+    with open(ac_file, 'w', encoding='utf-8') as fp:
         fp.write(f'ac_table = {compl}\n')
 
 

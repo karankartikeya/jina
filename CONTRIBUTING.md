@@ -1,10 +1,8 @@
-> The best way to know more about contributing and how to get started is to **[join us on Slack](https://slack.jina.ai)** and ask questions in our public channels.
+> The best way to know more about contributing and how to get started is to **[join us on Discord](https://discord.jina.ai)** and ask questions in our public channels.
 
 # Contributing to Jina
 
 Thanks for your interest in contributing to Jina. We're grateful for your initiative! ❤️
-
-I'm Alex C-G, Open Source Evangelist for Jina. I'm all about getting our new contributors up-to-speed, and that's what we'll do below.
 
 In this guide, we're going to go through the steps for each kind of contribution, and good and bad examples of what to do. We look forward to your contributions!
 
@@ -32,15 +30,13 @@ We love to get issue reports. But we love it even more if they're in the right f
 
 There are also a couple of nice to haves:
 
-* **Environment:** You can find this with `jina -vf
+* **Environment:** You can find this with ``jina -vf``
 * **Screenshots:** If they're relevant
-
-To understand how our issues are labeled, check out our [issue label guide](.github/github-issue-label-guide.md).
 
 <a name="-making-your-first-submission"></a>
 ## 🥇 Making Your First Submission
 
-0. Associate your local git config with your github account. If this is your first time using git you can follow [the steps](#associate-with-github-account).
+0. Associate your local git config with your GitHub account. If this is your first time using git you can follow [the steps](#associate-with-github-account).
 1. Fork the Jina repo and clone onto your computer. 
 1. Configure git pre-commit hooks. Please follow [the steps](#install-pre-commit-hooks)
 1. Create a [new branch](#naming-your-branch), for example `fix-jina-typo-1`.
@@ -54,7 +50,7 @@ To understand how our issues are labeled, check out our [issue label guide](.git
 
 **Note:** If you're just fixing a typo or grammatical issue, you can go straight to a pull request.
 
-### Associate with Github Account
+### Associate with GitHub Account
 
 - Confirm username and email on [your profile page](https://github.com/settings/profile).
 - Set git config on your computer.
@@ -86,12 +82,11 @@ It's easy to configure it:
 
 Now you will be automatically reminded to add docstrings to your code. `black` will take care that your code will match our style. Note that `black` will fail your commit but reformat your code, so you just need to add the files again and commit **again**.
 
-For more about our docstring style, refer to [this guide](https://docs.jina.ai/chapters/docstring/docstring.html).
+For more about our docstring style, refer to [this guide](./.github/DOCSTRINGS.rst).
 
 #### Restoring correct git blame
 
 Run `git config blame.ignoreRevsFile .github/.git-blame-ignore-revs`
-
 
 <a name="-naming-conventions"></a>
 ## ☑️ Naming Conventions
@@ -117,7 +112,7 @@ feat: add hat wobble
 |     |
 |     +-> Summary in present tense.
 |
-+-------> Type: chore, docs, feat, fix, refactor, style, or test.
++-------> Type: build, ci, chore, docs, feat, fix, refactor, style, or test.
 ```
 
 - build: Changes that affect the build system or external dependencies (example scopes: gulp, broccoli, npm)
@@ -127,7 +122,7 @@ feat: add hat wobble
 - fix: A bug fix
 - perf: A code change that improves performance
 - refactor: A code change that neither fixes a bug nor adds a feature
-- style: Changes that do not affect the meaning of the code (white-space, formatting, missing semi-colons, etc)
+- style: Changes that do not affect the meaning of the code (white-space, formatting, missing semi-colons, etc.)
 - test: Adding missing tests or correcting existing tests
 - chore: updating grunt tasks etc; no production code change
 
@@ -160,7 +155,7 @@ docs-add-cloud-section-33
 
 A good commit message helps us track Jina's development. A Pull Request with a bad commit message will be *rejected* automatically in the CI pipeline.
 
-Commit messages should stick to our [naming conventions](#naming-conventions) outlined above, and use the format `type(scope?): subject`:
+Commit messages should stick to our [naming conventions](#-naming-conventions) outlined above, and use the format `type(scope?): subject`:
 
 * `type` is one of the [types above](#specify-the-correct-types).
 * `scope` is optional, and represents the module your commit is working on.
@@ -217,6 +212,8 @@ pip install ".[test]"
 pytest -v -s --ignore-glob='tests/integration/hub_usage/dummyhub*' tests
 ```
 
+Tips: If you want to run the k8s tests then you should install [linkerd cli](https://linkerd.io/2.11/getting-started/#step-1-install-the-cli) before.
+
 When you add an executor or a driver, you may introduce new dependencies to Jina. You can verify the dependencies via:
 
 ```bash
@@ -241,6 +238,53 @@ Good docs make developers happy, and we love happy developers! We've got a few d
 * Tutorials/examples
 * Docstrings in Python functions in RST format - generated by Sphinx
 
+### Documentation guidelines
+
+1. Decide if your page is a **guide or a tutorial**. Make sure it fits its section.
+2. Use “**you**” instead of “we” or “I”. It **engages** the reader more.
+3. **Sentence case** for headers. (Use [https://convertcase.net/](https://convertcase.net/) to check)
+4. Keep sentences short. If possible, **fewer than 13 words**.
+5. Only use `backticks` for direct references to code elements.
+6. Jina product names should be capitalized and not backticked (Flow, Executor, Hub etc.).
+7. All **acronyms** should be UPPERCASE (Ex. YAML, JSON, HTTP, SSL).
+8. Think about the **structure** of the page beforehand. Split it into headers before writing the content.
+9. If relevant, include a “**See also**” section at the end.
+10. Link to any existing explanations of the concepts you are using.
+
+Bonus: **Know when to break the rules**. Documentation writing is as much art as it is science. Sometimes you will have to deviate from these rules in order to write good documentation.
+
+
+[MyST](https://myst-parser.readthedocs.io/en/latest/) Elements Usage
+
+1. Use the `{tab}` element to show multiple ways of doing one thing. [Example](https://jina.ai/serve/concepts/flow/basics/#start-and-stop) 
+2. Use the `{admonition}` boxes with care. We recommend restricting yourself to [Hint](https://jina.ai/serve/concepts/flow/basics/#create), [Caution](https://jina.ai/serve/concepts/gateway/customize-http-endpoints/#enable-graphql-endpoint) and [See Also](https://jina.ai/serve/concepts/gateway/customize-http-endpoints/#enable-graphql-endpoint).
+3. Use `{dropdown}` to hide optional content, such as long code snippets or console output. [Example](https://jina.ai/serve/concepts/client/third-party-clients/#use-curl)
+
+### Building documentation on your local machine
+
+#### Requirements
+
+* Python 3
+* [jq](https://stedolan.github.io/jq/download/)
+
+#### Steps to build locally
+
+```bash
+cd docs
+pip install -r requirements.txt
+export NUM_RELEASES=10
+bash makedoc.sh local-only
+```
+
+Docs website will be generated in `_build/dirhtml`
+To serve it, run
+
+```bash
+cd _build/dirhtml
+python -m http.server
+```
+
+You can now see docs website on [http://localhost:8000](http://localhost:8000) on your browser.
 
 ## 🙏 Thank You
 

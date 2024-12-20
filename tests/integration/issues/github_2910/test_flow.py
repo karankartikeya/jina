@@ -1,7 +1,7 @@
 from jina import Document, Executor, Flow, requests
 
 
-def test_target_peapod(mocker):
+def test_target_executor(mocker):
     class UpExecutor(Executor):
         @requests
         def foo(self, **kwargs):
@@ -14,9 +14,9 @@ def test_target_peapod(mocker):
 
     f = (
         Flow()
-        .add(uses=UpExecutor, parallel=3, name='up')
+        .add(uses=UpExecutor, shards=3, name='up')
         .add(uses=DownExecutor, needs='gateway', name='down')
-        .join(needs=['up', 'down'])
+        .needs(needs=['up', 'down'])
     )
 
     with f:
@@ -24,7 +24,7 @@ def test_target_peapod(mocker):
         fail_mock = mocker.Mock()
         f.post(
             on='/foo',
-            target_peapod='down',
+            target_executor='down',
             inputs=Document(),
             on_done=success_mock,
             on_error=fail_mock,

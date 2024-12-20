@@ -4,20 +4,21 @@ import subprocess
 
 import pytest
 
-from cli.autocomplete import ac_table
-from cli.export import api_to_dict
-from cli.lookup import _build_lookup_table, lookup_and_print
 from jina.checker import NetworkChecker
 from jina.jaml import JAML
-from jina.parsers import set_pod_parser, set_pea_parser
+from jina.orchestrate.pods.factory import PodFactory
+from jina.parsers import set_deployment_parser
 from jina.parsers.ping import set_ping_parser
-from jina.peapods import Pea
+from jina_cli.autocomplete import ac_table
+from jina_cli.export import api_to_dict
+from jina_cli.lookup import _build_lookup_table, lookup_and_print
+from tests.helper import _generate_pod_args
 
 
 def test_export_api(tmpdir):
-    with open(tmpdir / 'test.yml', 'w', encoding='utf8') as fp:
+    with open(tmpdir / 'test.yml', 'w', encoding='utf-8') as fp:
         JAML.dump(api_to_dict(), fp)
-    with open(tmpdir / 'test.json', 'w', encoding='utf8') as fp:
+    with open(tmpdir / 'test.json', 'w', encoding='utf-8') as fp:
         json.dump(api_to_dict(), fp)
 
 
@@ -28,7 +29,7 @@ def test_help_lookup(cli, capsys):
         assert cli in nkw2kw
         lookup_and_print(cli)
         captured = capsys.readouterr()
-        assert captured.out
+        assert 'Traceback (most recent call last)' not in captured.out
 
 
 def test_main_cli():
@@ -36,11 +37,19 @@ def test_main_cli():
 
 
 def test_cli_help():
-    subprocess.check_call(['jina', 'help', 'pod'])
+    subprocess.check_call(['jina', 'help', 'deployment'])
+
+
+@pytest.mark.parametrize('uses', ['jinaai://jina-ai/DummyHubExecutor'])
+def test_cli_hub(uses):
+    subprocess.check_call(['jina', 'hub', '--help'])
+    for cmd in ['new', 'status', 'pull', 'push']:
+        subprocess.check_call(['jina', 'hub', cmd, '--help'])
+    subprocess.check_call(['jina', 'hub', 'pull', uses])
 
 
 def test_cli_warn_unknown_args():
-    subprocess.check_call(['jina', 'help', 'pod', '--abcdefg'])
+    subprocess.check_call(['jina', 'help', 'deployment', '--abcdefg'])
 
 
 @pytest.mark.parametrize('cli', ac_table['commands'])
@@ -59,62 +68,73 @@ def test_all_start_method(smethod):
     assert smethod in s.decode()
 
 
+def test_help_non_exist():
+    s = subprocess.check_output(
+        ['jina', 'help', 'abcdefg'],
+        stderr=subprocess.STDOUT,
+    )
+    assert 'misspelling' in s.decode()
+
+
+def test_help_exist():
+    s = subprocess.check_output(
+        ['jina', 'help', 'port'],
+        stderr=subprocess.STDOUT,
+    )
+    assert 'a CLI argument of Jina' in s.decode()
+
+
 def test_parse_env_map():
-    a = set_pod_parser().parse_args(['--env', 'key1=value1', '--env', 'key2=value2'])
+    a = set_deployment_parser().parse_args(
+        ['--env', 'key1=value1', '--env', 'key2=value2']
+    )
     assert a.env == {'key1': 'value1', 'key2': 'value2'}
 
-    a = set_pod_parser().parse_args(['--env', 'key1=value1', 'key2=value2', 'key3=3'])
+    a = set_deployment_parser().parse_args(
+        ['--env', 'key1=value1', 'key2=value2', 'key3=3']
+    )
     assert a.env == {'key1': 'value1', 'key2': 'value2', 'key3': 3}
-
-
-def test_shards_parallel_synonym():
-    a = set_pod_parser().parse_args(['--shards', '2'])
-    assert a.parallel == 2
-    with pytest.raises(AttributeError):
-        a.shards
-
-    a = set_pod_parser().parse_args(['--parallel', '2'])
-    assert a.parallel == 2
-    with pytest.raises(AttributeError):
-        a.shards
-
-    a = set_pod_parser().parse_args([])
-    assert a.parallel == 1
-    with pytest.raises(AttributeError):
-        a.shards
 
 
 @pytest.mark.slow
 def test_ping():
-    a1 = set_pea_parser().parse_args([])
-    a2 = set_ping_parser().parse_args(
-        ['0.0.0.0', str(a1.port_ctrl), '--print-response']
-    )
+    a1 = _generate_pod_args()
+    a2 = set_ping_parser().parse_args(['executor', f'0.0.0.0:{a1.port[0]}'])
 
     a3 = set_ping_parser().parse_args(
-        ['0.0.0.1', str(a1.port_ctrl), '--timeout', '1000']
+        ['executor', f'0.0.0.1:{a1.port[0]}', '--timeout', '1000']
     )
 
     with pytest.raises(SystemExit) as cm:
-        with Pea(a1):
+        with PodFactory.build_pod(a1):
             NetworkChecker(a2)
 
     assert cm.value.code == 0
 
     # test with bad address
     with pytest.raises(SystemExit) as cm:
-        with Pea(a1):
+        with PodFactory.build_pod(a1):
             NetworkChecker(a3)
 
     assert cm.value.code == 1
 
 
-@pytest.mark.parametrize('project', ['fashion', 'chatbot', 'multimodal'])
-def test_fork(tmpdir, project):
-    subprocess.check_call(['jina', 'hello', 'fork', project, f'{tmpdir}/tmp'])
+@pytest.mark.parametrize(
+    'cmd',
+    [
+        ['jina', 'ping', 'flow', '127.0.0.1:8080'],
+        ['jina', 'help', 'port'],
+        ['jina', 'hub'],
+    ],
+)
+def test_logo_silence(cmd):
+    from jina.constants import __resources_path__
 
-    assert os.path.exists(f'{tmpdir}/tmp/app.py')
-    assert os.path.exists(f'{tmpdir}/tmp/my_executors.py')
-    if project == 'multimodal':
-        assert os.path.exists(f'{tmpdir}/tmp/flow-index.yml')
-        assert os.path.exists(f'{tmpdir}/tmp/flow-search.yml')
+    with open(os.path.join(__resources_path__, 'jina.logo'), encoding='utf-8') as fp:
+        logo_str = fp.read()
+
+    s = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+    )
+    assert logo_str not in s.stdout.decode()

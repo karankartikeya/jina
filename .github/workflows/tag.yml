@@ -14,13 +14,13 @@ jobs:
   update-schema:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v2.5.0
+      - uses: actions/checkout@v2.5.0
         with:
           repository: jina-ai/api
           path: schema
           token: ${{ secrets.JINA_DEV_BOT }}
-      - uses: actions/setup-python@v2
+      - uses: actions/setup-python@v4
         with:
           python-version: 3.7
       - uses: actions/setup-node@v2
@@ -33,32 +33,20 @@ jobs:
           echo "JINA_VERSION=${JINA_VERSION}" >> $GITHUB_ENV
           echo "V_JINA_VERSION=${V_JINA_VERSION}" >> $GITHUB_ENV
           echo "JINA_MINOR_VERSION=${JINA_MINOR_VERSION}" >> $GITHUB_ENV
-          pip install .[daemon] --no-cache-dir
+          pip install . --no-cache-dir
           cd schema
           mkdir -p schemas
-          jina export-api --schema-path schemas/"$JINA_VERSION.json" schemas/latest.json schemas/latest --yaml-path "$JINA_VERSION.yml" latest.yml --json-path "$JINA_VERSION.json" latest.json latest
+          jina export schema --schema-path schemas/"$JINA_VERSION.json" schemas/latest.json schemas/latest --yaml-path "$JINA_VERSION.yml" latest.yml --json-path "$JINA_VERSION.json" latest.json latest
           python ../scripts/get-openapi-schemas.py
           npm install --prefix ~ snippet-enricher-cli
           ~/node_modules/.bin/snippet-enricher-cli --input=gateway.json --targets=shell_curl > gateway-with-code.json
-          ~/node_modules/.bin/snippet-enricher-cli --input=daemon.json --targets=shell_curl > daemon-with-code.json
           cd -
-      - name: redoc-cli-jinad
-        uses: seeebiii/redoc-cli-github-action@v10
-        with:
-          args: 'bundle schema/daemon-with-code.json -o jinad.html'
       - name: redoc-cli-gateway
         uses: seeebiii/redoc-cli-github-action@v10
         with:
           args: 'bundle schema/gateway-with-code.json -o rest.html'
       - name: push-to-api-repo
         run: |
-          mkdir -p schema/daemon/
-          cp jinad.html schema/daemon/index.html
-          cp jinad.html schema/daemon/${{env.JINA_VERSION}}.html
-          cp schema/daemon.json schema/daemon/${{env.JINA_VERSION}}.json
-          cp schema/daemon.json schema/daemon/latest.json
-          rm schema/daemon.json schema/daemon-with-code.json
-          rm -rf schema/jinad
           mkdir -p schema/rest/
           cp rest.html schema/rest/index.html
           cp rest.html schema/rest/${{env.JINA_VERSION}}.html
@@ -71,17 +59,6 @@ jobs:
           git config --local user.name "Jina Dev Bot"
           git add . && git commit -m "update ${{env.JINA_VERSION}} due to ${{github.event_name}} on ${{github.repository}}" && git push
 
-  deploy-jinad-cloud-jina-ai:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: benc-uk/workflow-dispatch@v1
-        with:
-          workflow: Destroy previous & Deploy new JinaD
-          repo: jina-ai/jina-terraform
-          token: ${{ secrets.JINA_DEV_BOT }}
-          ref: refs/heads/main
-          inputs: '{ "TFID": "cloud.jina.ai", "instances": "{ \"cloud.jina.ai\": { \"type\": \"t2.micro\", \"disk\" = { \"type\" = \"gp2\", \"size\" = 20 }, \"pip\": [], \"command\": \"sudo echo Hello from cloud.jina.ai\"} }", "region": "us-east-1", "cloudflare_record_name": "cloud" }'
-
   update-doc:
     runs-on: ubuntu-latest
     steps:
@@ -89,7 +66,7 @@ jobs:
         with:
           workflow: Manual Docs Build
           token: ${{ secrets.JINA_DEV_BOT }}
-          inputs: '{ "release_token": "${{ env.release_token }}", "triggered_by": "TAG"}'
+          inputs: '{ "release_token": "${{ env.release_token }}", "triggered_by": "TAG", "build_old_docs": "TRUE"}'
         env:
           release_token: ${{ secrets.JINA_CORE_RELEASE_TOKEN }}
 
@@ -110,10 +87,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v2.5.0
         with:
           ref: 'master'
-      - uses: actions/setup-python@v2
+      - uses: actions/setup-python@v4
         with:
           python-version: 3.7
       - run: |

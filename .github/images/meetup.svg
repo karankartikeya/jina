@@ -18,7 +18,11 @@
             }
             </style>
             <p>
-                📢 29 July 2021: <span style="color: blue; text-decoration: underline">Join us in Berlin for our <b>Jina &amp; Tonic </b> meetup!</span> 🍹
+                <a href="fast">
+                    <!--startmsg-->
+Learn more about Lightning
+                    <!--endmsg-->
+                </a>
             </p>
         </div>
     </foreignObject>

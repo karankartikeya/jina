@@ -32,9 +32,14 @@ function clean_build {
     rm -rf build
 }
 
+function clean_egg {
+    rm -rf *.egg-info
+    rm -rf build
+}
+
 function pub_pypi {
     # publish to pypi
-    clean_build
+    clean_egg
     cp extra-requirements.txt jina/resources/
     python setup.py sdist
     twine upload dist/*
@@ -62,11 +67,6 @@ function make_release_note {
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
-if [[ "$BRANCH" != "master" ]]; then
-  printf "You are not at master branch, exit\n";
-  exit 1;
-fi
-
 LAST_UPDATE=`git show --no-notes --format=format:"%H" $BRANCH | head -n 1`
 LAST_COMMIT=`git show --no-notes --format=format:"%H" origin/$BRANCH | head -n 1`
 
@@ -79,6 +79,10 @@ fi
 export RELEASE_VER=$(sed -n '/^__version__/p' $INIT_FILE | cut -d \' -f2)
 LAST_VER=$(git tag -l | sort -V | tail -n1)
 printf "last version: \e[1;32m$LAST_VER\e[0m\n"
+
+# Update new _versions.json if necessary
+python ./scripts/prepend_version_json.py --version "v$RELEASE_VER"
+git add ./docs/_versions.json
 
 if [[ $1 == "final" ]]; then
   printf "this will be a final release: \e[1;33m$RELEASE_VER\e[0m\n"
@@ -115,12 +119,6 @@ elif [[ $1 == 'rc' ]]; then
   slack_notif
 else
   # as a prerelease, pypi update only, no back commit etc.
-  COMMITS_SINCE_LAST_VER=$(git rev-list $LAST_VER..HEAD --count)
-  NEXT_VER=$RELEASE_VER".dev"$COMMITS_SINCE_LAST_VER
-  printf "this will be a developmental release: \e[1;33m$NEXT_VER\e[0m\n"
-
-  VER_TAG_NEXT=$VER_TAG\'${NEXT_VER}\'
-  update_ver_line "$VER_TAG" "$VER_TAG_NEXT" "$INIT_FILE"
-
+  # previously the INIT_FILE must have been updated
   pub_pypi
 fi

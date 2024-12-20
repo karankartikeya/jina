@@ -1,41 +1,41 @@
 import os
+from typing import Dict, Tuple
 
 import numpy as np
-from typing import Tuple, Dict
 
-from jina import Executor, DocumentArray, requests, Document
+from jina import Document, DocumentArray, Executor, requests
 from jina.logging.logger import JinaLogger
 
 
 class CrudIndexer(Executor):
-    """Simple indexer class """
+    """Simple indexer class"""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.logger = JinaLogger('CrudIndexer')
         self._docs = DocumentArray()
-        self._dump_location = os.path.join(self.metas.workspace, 'docs')
+        self._dump_location = os.path.join(self.metas.workspace, 'docs.json')
         if os.path.exists(self._dump_location):
-            self._docs = DocumentArray.load(self._dump_location)
-            self.logger.info(f'Loaded {len(self._docs)} from {self._dump_location}')
+            self._docs = DocumentArray.load_json(self._dump_location)
+            self.logger.debug(f'Loaded {len(self._docs)} from {self._dump_location}')
         else:
-            self.logger.info(f'No data found at {self._dump_location}')
+            self.logger.warning(f'No data found at {self._dump_location}')
 
     @requests(on='/index')
-    def index(self, docs: 'DocumentArray', **kwargs):
+    def index(self, docs: DocumentArray, **kwargs):
         self._docs.extend(docs)
 
     @requests(on='/update')
-    def update(self, docs: 'DocumentArray', **kwargs):
+    def update(self, docs: DocumentArray, **kwargs):
         self.delete(docs)
         self.index(docs)
 
     def close(self) -> None:
-        self.logger.info(f'Dumping {len(self._docs)} to {self._dump_location}')
-        self._docs.save(self._dump_location)
+        self.logger.debug(f'Dumping {len(self._docs)} to {self._dump_location}')
+        self._docs.save_json(self._dump_location)
 
     @requests(on='/delete')
-    def delete(self, docs: 'DocumentArray', **kwargs):
+    def delete(self, docs: DocumentArray, **kwargs):
         # TODO we can do del _docs[d.id] once
         # tests.unit.types.arrays.test_documentarray.test_delete_by_id is fixed
         ids_to_delete = [d.id for d in docs]
@@ -47,10 +47,10 @@ class CrudIndexer(Executor):
             del self._docs[i]
 
     @requests(on='/search')
-    def search(self, docs: 'DocumentArray', parameters: Dict, **kwargs):
+    def search(self, docs: DocumentArray, parameters: Dict, **kwargs):
         top_k = int(parameters.get('top_k', 1))
-        a = np.stack(docs.get_attributes('embedding'))
-        b = np.stack(self._docs.get_attributes('embedding'))
+        a = np.stack(docs[:, 'embedding'])
+        b = np.stack(self._docs[:, 'embedding'])
         q_emb = _ext_A(_norm(a))
         d_emb = _ext_B(_norm(b))
         dists = _cosine(q_emb, d_emb)
@@ -58,7 +58,7 @@ class CrudIndexer(Executor):
         for _q, _ids, _dists in zip(docs, idx, dist):
             for _id, _dist in zip(_ids, _dists):
                 d = Document(self._docs[int(_id)], copy=True)
-                d.scores['cosine'] = 1 - _dist
+                d.scores['cosine'].value = 1 - _dist
                 _q.matches.append(d)
 
     @staticmethod
@@ -86,14 +86,14 @@ def _ext_A(A):
     nA, dim = A.shape
     A_ext = _get_ones(nA, dim * 3)
     A_ext[:, dim : 2 * dim] = A
-    A_ext[:, 2 * dim :] = A ** 2
+    A_ext[:, 2 * dim :] = A**2
     return A_ext
 
 
 def _ext_B(B):
     nB, dim = B.shape
     B_ext = _get_ones(dim * 3, nB)
-    B_ext[:dim] = (B ** 2).T
+    B_ext[:dim] = (B**2).T
     B_ext[dim : 2 * dim] = -2.0 * B.T
     del B
     return B_ext

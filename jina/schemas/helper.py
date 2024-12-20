@@ -10,7 +10,7 @@ def _python_type_to_schema_type(p):
     elif p == 'dict':
         dtype = 'object'
     else:
-        dtype = None
+        dtype = 'null'
         # raise TypeError(f'{p} is not supported')
 
     return dtype
@@ -25,12 +25,14 @@ def _cli_to_schema(
     namespace='Jina',
     description='',
 ):
-    pod_api = None
+    deployment_api = []
+
+    if not isinstance(target, list):
+        target = [target]
 
     for d in api_dict['methods']:
-        if d['name'] == target:
-            pod_api = d['options']
-            break
+        if d['name'] in target:
+            deployment_api.extend(d['options'])
 
     _schema = {
         'properties': {},
@@ -40,21 +42,21 @@ def _cli_to_schema(
         'description': description,
     }
 
-    for p in pod_api:
-        dtype = _python_type_to_schema_type(p['type'])
-        pv = {'description': p['help'].strip(), 'type': dtype, 'default': p['default']}
-        if p['choices']:
-            pv['enum'] = p['choices']
-        if p['required']:
-            _schema['required'].append(p['name'])
+    for d in deployment_api:
+        dtype = _python_type_to_schema_type(d['type'])
+        pv = {'description': d['help'].strip(), 'type': dtype, 'default': d['default']}
+        if d['choices']:
+            pv['enum'] = d['choices']
+        if d['required']:
+            _schema['required'].append(d['name'])
         if dtype == 'array':
             _schema['items'] = {'type': 'string', 'minItems': 1, 'uniqueItems': True}
 
-        _schema['properties'][p['name']] = pv
+        _schema['properties'][d['name']] = pv
 
     if extras:
         _schema['properties'].update(extras)
     if required:
         _schema['required'].extend(required)
 
-    return {f'{namespace}::{target.capitalize()}': _schema}
+    return {f'{namespace}::{target[0].capitalize()}': _schema}

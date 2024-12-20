@@ -1,5 +1,4 @@
-from jina import Flow
-from jina import Document, Executor, requests
+from jina import Client, Document, Executor, Flow, requests
 
 
 def validate_results(results):
@@ -12,7 +11,7 @@ def validate_results(results):
 
 
 class MatchAdder(Executor):
-    def __init__(self, traversal_paths=('r',), **kwargs):
+    def __init__(self, traversal_paths='r', **kwargs):
         super().__init__(**kwargs)
         self._traversal_paths = traversal_paths
 
@@ -24,33 +23,33 @@ class MatchAdder(Executor):
                     doc.matches.append(Document())
 
 
-def test_single_executor():
+def test_single_executor(port_generator):
 
-    f = Flow().add(
-        uses={'jtype': 'MatchAdder', 'with': {'traversal_paths': ['r', 'm']}}
+    exposed_port = port_generator()
+
+    f = Flow(port=exposed_port).add(
+        uses={'jtype': 'MatchAdder', 'with': {'traversal_paths': 'r,m'}}
     )
 
     with f:
-        results = f.post(
-            on='index',
-            inputs=Document(),
-            return_results=True,
+        results = Client(port=exposed_port).post(
+            on='index', inputs=Document(), return_responses=True
         )
     validate_results(results)
 
 
-def test_multi_executor():
+def test_multi_executor(port_generator):
+
+    exposed_port = port_generator()
 
     f = (
-        Flow()
-        .add(uses={'jtype': 'MatchAdder', 'with': {'traversal_paths': ['r']}})
-        .add(uses={'jtype': 'MatchAdder', 'with': {'traversal_paths': ['m']}})
+        Flow(port=exposed_port)
+        .add(uses={'jtype': 'MatchAdder', 'with': {'traversal_paths': 'r'}})
+        .add(uses={'jtype': 'MatchAdder', 'with': {'traversal_paths': 'm'}})
     )
 
     with f:
-        results = f.post(
-            on='index',
-            inputs=Document(),
-            return_results=True,
+        results = Client(port=exposed_port).post(
+            on='index', inputs=Document(), return_responses=True
         )
     validate_results(results)

@@ -1,4 +1,0 @@
-jtype: Flow
-version: '1.0'
-executors:
-  - name: executor_ex

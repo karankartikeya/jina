@@ -1,11 +1,12 @@
-from cli.export import api_to_dict
+from jina.schemas.gateway import schema_gateway
 from jina.schemas.helper import _cli_to_schema
+from jina_cli.export import api_to_dict
 
 _schema_flow_with = _cli_to_schema(
     api_to_dict(),
-    'flow',
+    ['flow', 'gateway'],
     allow_addition=False,
-    description='The config of Flow, unrecognized config arguments will be applied to all Pods',
+    description='The config of Flow, unrecognized config arguments will be applied to all Deployments',
 )['Jina::Flow']
 
 schema_flow = {
@@ -27,14 +28,15 @@ schema_flow = {
             },
             'executors': {
                 'description': 'Define the steps in the Flow.\n'
-                'A Pod is a container and interface for one or multiple Peas that have the same properties.',
+                'A Deployment is a container and interface for one or multiple Pods that have the same properties.',
                 'type': 'array',
-                'items': {'$ref': '#/definitions/Jina::Pod'},
+                'items': {'$ref': '#/definitions/Jina::Deployment'},
                 'minItems': 1,
             },
+            'gateway': schema_gateway['Jina::Gateway'],
         },
         'type': 'object',
         'additionalProperties': False,
-        'required': ['jtype', 'version', 'pods'],
+        'required': ['jtype', 'executors'],
     }
 }

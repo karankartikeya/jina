@@ -1,8 +1,0 @@
-!Flow
-version: '1'
-pods:
-  - name: pod1
-    uses: docker://jinahub/pod
-    docker-kwargs:
-      hello: 0
-      environment: ['VAR1=BAR', 'VAR2=FOO']

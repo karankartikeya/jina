@@ -37,7 +37,7 @@ The term "final release" is relative to "developmental release" as described bel
 The recommended way of installing Jina is `pip install -U jina`
 
 `"standard"` include extra dependencies that enables:
-- Jina Hub + Docker support
+- Executor Hub + Docker support
 - FastAPI + Websocket support (required when using `Flow(protocol='http')` or `Flow(protocol='websocket')`)
 - the best compression via LZ4 algorithm
 - the best async eventloop management via `uvloop`
@@ -86,7 +86,7 @@ The following example shows how Jina is released from 0.9 to 0.9.2 according to 
 
 ## Docker image versioning
 
-Our univeral Docker image is ready-to-use on linux/amd64, linux/armv7+, linux/arm/v6, linux/arm64. The Docker image name always starts with `jinaai/jina` followed by a tag composed of three parts:
+Our universal Docker image is ready-to-use on linux/amd64, linux/armv7+, linux/arm/v6, linux/arm64. The Docker image name always starts with `jinaai/jina` followed by a tag composed of three parts:
 
 ```text
 jinaai/jina:{version}{python_version}{extra}
@@ -98,19 +98,19 @@ jinaai/jina:{version}{python_version}{extra}
     - `x.y.z`: the release of a particular version;
     - `x.y`: the alias to the last `x.y.z` patch release, i.e. `x.y` = `x.y.max(z)`;
 - `{python_version}`: The Python version of the image. Possible values:
-    - ` `, `-py37`: Python 3.7;
-    - `-py38` for Python 3.8;
+    - `-py37`: Python 3.7;
+    - ` `, `-py38` for Python 3.8;
     - `-py39` for Python 3.9;
+    - `-py310` for Python 3.10;
+    - `-py311` for Python 3.11;
 - `{extra}`: the extra dependency installed along with Jina. Possible values:
     - ` `: Jina is installed inside the image via `pip install jina`;
     - `-standard`: Jina is installed inside the image via `pip install jina`. It includes all recommended dependencies;  
     - `-devel`: Jina is installed inside the image via `pip install "jina[devel]"`. It includes `standard` plus some extra dependencies;
-    - `-daemon`: Jina is installed inside the image via `pip install "jina[dameon]"` along with `fluentd`; **and the entrypoint is set to `jinad`**.
 
 Examples:
 
 - `jinaai/jina:0.9.6`: the `0.9.6` release with Python 3.7 and the entrypoint of `jina`.
-- `jinaai/jina:latest-py38-daemon`: the latest release with Python 3.8 base and the entrypoint of Jina daemon.
 - `jinaai/jina:latest`: the latest release with Python 3.7 and the entrypoint of `jina`
 - `jinaai/jina:master`: the master with Python 3.7 and the entrypoint of `jina`
 
@@ -123,7 +123,7 @@ Examples:
 
 Six images are built, i.e. taking the combination of:
   - `{python_version} = ["-py37", "-py38", "-py39"]`
-  - `{extra} = ["", "-devel", "-daemon", "-standard"]`
+  - `{extra} = ["", "-devel", "-standard"]`
 
 
 ### Image size on different tags
@@ -159,7 +159,7 @@ Six images are built, i.e. taking the combination of:
 
 ## Manual Release Entrypoint
 
-Manual release entrypoint is designed for authroized core developers of Jina.
+Manual release entrypoint is designed for authorized core developers of Jina.
 
 ### Trigger weekly release manually
 

@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import functools
+import inspect
 import json
 import math
 import os
@@ -8,25 +10,34 @@ import re
 import sys
 import threading
 import time
+import urllib
 import uuid
 import warnings
-
 from argparse import ArgumentParser, Namespace
+from collections.abc import MutableMapping
 from datetime import datetime
 from itertools import islice
+from socket import AF_INET, SOCK_STREAM, socket
 from types import SimpleNamespace
 from typing import (
-    Tuple,
-    Optional,
-    Iterator,
+    TYPE_CHECKING,
     Any,
-    Union,
-    List,
+    Callable,
     Dict,
-    Set,
-    Sequence,
     Iterable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    TypeVar,
+    Union,
 )
+
+from rich.console import Console
+
+from jina.constants import __windows__
 
 __all__ = [
     'batch_iterator',
@@ -45,12 +56,18 @@ __all__ = [
     'convert_tuple_to_list',
     'run_async',
     'deprecated_alias',
+    'retry',
     'countdown',
     'CatchAllCleanupContextManager',
     'download_mermaid_url',
     'get_readable_size',
     'get_or_reuse_loop',
+    'T',
+    'get_rich_console',
 ]
+
+T = TypeVar('T')
+GATEWAY_NAME = 'gateway'
 
 
 def deprecated_alias(**aliases):
@@ -62,12 +79,20 @@ def deprecated_alias(**aliases):
     For example:
         .. highlight:: python
         .. code-block:: python
-            @deprecated_alias(input_fn=('inputs', 0), buffer=('input_fn', 0), callback=('on_done', 1), output_fn=('on_done', 1))
+
+            @deprecated_alias(
+                input_fn=('inputs', 0),
+                buffer=('input_fn', 0),
+                callback=('on_done', 1),
+                output_fn=('on_done', 1),
+            )
+            def some_function(inputs, input_fn, on_done):
+                pass
 
     :param aliases: maps aliases to new arguments
     :return: wrapper
     """
-    from .excepts import NotSupportedError
+    from jina.excepts import NotSupportedError
 
     def _rename_kwargs(func_name: str, kwargs, aliases):
         """
@@ -125,6 +150,57 @@ def deprecated_alias(**aliases):
     return deco
 
 
+def deprecated_method(new_function_name):
+    def deco(func):
+        def wrapper(*args, **kwargs):
+            warnings.warn(
+                f'`{func.__name__}` is renamed to `{new_function_name}`, the usage of `{func.__name__}` is '
+                f'deprecated and will be removed.',
+                DeprecationWarning,
+            )
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return deco
+
+
+def retry(
+    num_retry: int = 3,
+    message: str = 'Calling {func_name} failed, retry attempt {attempt}/{num_retry}. Error: {error!r}',
+):
+    """
+    Retry calling a function again in case of an error.
+
+    :param num_retry: number of times to retry
+    :param message: message to log when error happened
+    :return: wrapper
+    """
+    from jina.logging.predefined import default_logger
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for i in range(num_retry):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    default_logger.warning(
+                        message.format(
+                            func_name=func.__name__,
+                            attempt=i + 1,
+                            num_retry=num_retry,
+                            error=e,
+                        )
+                    )
+                    if i + 1 == num_retry:
+                        raise
+
+        return wrapper
+
+    return decorator
+
+
 def get_readable_size(num_bytes: Union[int, float]) -> str:
     """
     Transform the bytes into readable value with different units (e.g. 1 KB, 20 MB, 30.1 GB).
@@ -135,9 +211,9 @@ def get_readable_size(num_bytes: Union[int, float]) -> str:
     num_bytes = int(num_bytes)
     if num_bytes < 1024:
         return f'{num_bytes} Bytes'
-    elif num_bytes < 1024 ** 2:
+    elif num_bytes < 1024**2:
         return f'{num_bytes / 1024:.1f} KB'
-    elif num_bytes < 1024 ** 3:
+    elif num_bytes < 1024**3:
         return f'{num_bytes / (1024 ** 2):.1f} MB'
     else:
         return f'{num_bytes / (1024 ** 3):.1f} GB'
@@ -154,8 +230,9 @@ def batch_iterator(
     For example:
     .. highlight:: python
     .. code-block:: python
+
             for req in batch_iterator(data, batch_size, split_over_axis):
-                # Do something with batch
+                pass  # Do something with batch
 
     :param data: Data source.
     :param batch_size: Size of one batch.
@@ -210,9 +287,9 @@ def parse_arg(v: str) -> Optional[Union[bool, int, str, list, float]]:
 
     if v.startswith('[') and v.endswith(']'):
         # function args must be immutable tuples not list
-        tmp = v.replace('[', '').replace(']', '').strip().split(',')
+        tmp = v.replace('[', '').replace(']', '').strip()
         if len(tmp) > 0:
-            return [parse_arg(vv.strip()) for vv in tmp]
+            return [parse_arg(vv.strip()) for vv in tmp.split(',')]
         else:
             return []
     try:
@@ -238,7 +315,9 @@ def countdown(t: int, reason: str = 'I am blocking this thread') -> None:
     For example:
         .. highlight:: python
         .. code-block:: python
-            countdown(10, reason=colored('re-fetch access token', 'cyan', attrs=['bold', 'reverse']))
+            countdown(
+                10, reason=colored('re-fetch access token', 'cyan', attrs=['bold', 'reverse'])
+            )
 
     :param t: Countdown time.
     :param reason: A string message of reason for this Countdown.
@@ -375,46 +454,74 @@ def random_name() -> str:
     return '_'.join(random.choice(_random_names[j]) for j in range(2))
 
 
+assigned_ports = set()
+unassigned_ports = []
+DEFAULT_MIN_PORT = 49153
+MAX_PORT = 65535
+
+
+def reset_ports():
+    def _get_unassigned_ports():
+        # if we are running out of ports, lower default minimum port
+        if MAX_PORT - DEFAULT_MIN_PORT - len(assigned_ports) < 100:
+            min_port = int(os.environ.get('JINA_RANDOM_PORT_MIN', '16384'))
+        else:
+            min_port = int(
+                os.environ.get('JINA_RANDOM_PORT_MIN', str(DEFAULT_MIN_PORT))
+            )
+        max_port = int(os.environ.get('JINA_RANDOM_PORT_MAX', str(MAX_PORT)))
+        return set(range(min_port, max_port + 1)) - set(assigned_ports)
+
+    unassigned_ports.clear()
+    assigned_ports.clear()
+    unassigned_ports.extend(_get_unassigned_ports())
+    random.shuffle(unassigned_ports)
+
+
 def random_port() -> Optional[int]:
     """
-    Get a random available port number from '49153' to '65535'.
+    Get a random available port number.
 
     :return: A random port.
     """
 
-    import threading
-    import multiprocessing
-    from contextlib import closing
-    import socket
+    def _random_port():
+        import socket
 
-    def _get_port(port=0):
-        with multiprocessing.Lock():
-            with threading.Lock():
-                with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-                    try:
-                        s.bind(('', port))
-                        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                        return s.getsockname()[1]
-                    except OSError:
-                        pass
+        def _check_bind(port):
+            with socket.socket() as s:
+                try:
+                    s.bind(('', port))
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    return port
+                except OSError:
+                    return None
 
-    _port = None
-    if 'JINA_RANDOM_PORT_MIN' in os.environ or 'JINA_RANDOM_PORT_MAX' in os.environ:
-        min_port = int(os.environ.get('JINA_RANDOM_PORT_MIN', '49153'))
-        max_port = int(os.environ.get('JINA_RANDOM_PORT_MAX', '65535'))
-        all_ports = list(range(min_port, max_port + 1))
-        random.shuffle(all_ports)
-        for _port in all_ports:
-            if _get_port(_port) is not None:
+        _port = None
+        if len(unassigned_ports) == 0:
+            reset_ports()
+        for idx, _port in enumerate(unassigned_ports):
+            if _check_bind(_port) is not None:
                 break
         else:
             raise OSError(
-                f'can not find an available port between [{min_port}, {max_port}].'
+                f'can not find an available port in {len(unassigned_ports)} unassigned ports, assigned already {len(assigned_ports)} ports'
             )
-    else:
-        _port = _get_port()
+        int_port = int(_port)
+        unassigned_ports.pop(idx)
+        assigned_ports.add(int_port)
+        return int_port
 
-    return int(_port)
+    try:
+        return _random_port()
+    except OSError:
+        assigned_ports.clear()
+        unassigned_ports.clear()
+        return _random_port()
+
+
+def random_ports(n_ports):
+    return [random_port() for _ in range(n_ports)]
 
 
 def random_identity(use_uuid1: bool = False) -> str:
@@ -432,7 +539,7 @@ def random_identity(use_uuid1: bool = False) -> str:
     :return: A random UUID.
 
     """
-    return str(random_uuid(use_uuid1))
+    return random_uuid(use_uuid1).hex
 
 
 def random_uuid(use_uuid1: bool = False) -> uuid.UUID:
@@ -556,7 +663,7 @@ _COLORS = {
 
 _RESET = '\033[0m'
 
-if os.name == 'nt':
+if __windows__:
     os.system('color')
 
 
@@ -620,23 +727,40 @@ def colored(
     return text
 
 
-class ColorContext:
-    def __init__(self, color: str, bold: Optional[bool] = False):
-        self._color = color
-        self._bold = bold
+def colored_rich(
+    text: str,
+    color: Optional[str] = None,
+    on_color: Optional[str] = None,
+    attrs: Optional[Union[str, list]] = None,
+) -> str:
+    """
+    Give the text with color. You should only use it when printing with rich print. Othersiwe please see the colored
+    function
 
-    def __enter__(self):
-        if self._bold:
-            fmt_str = '\033[1;%dm'
-        else:
-            fmt_str = '\033[0;%dm'
+    :param text: The target text
+    :param color: The color of text
+    :param on_color: The on color of text: ex on yellow
+    :param attrs: Attributes of color
 
-        c = fmt_str % (_COLORS[self._color])
-        print(c, flush=True, end='')
-        return self
+    :return: Colored text.
+    """
+    if 'JINA_LOG_NO_COLOR' not in os.environ:
+        if color:
+            text = _wrap_text_in_rich_bracket(text, color)
+        if on_color:
+            text = _wrap_text_in_rich_bracket(text, on_color)
 
-    def __exit__(self, typ, value, traceback):
-        print(_RESET, flush=True, end='')
+        if attrs:
+            if isinstance(attrs, str):
+                attrs = [attrs]
+            if isinstance(attrs, list):
+                for attr in attrs:
+                    text = _wrap_text_in_rich_bracket(text, attr)
+    return text
+
+
+def _wrap_text_in_rich_bracket(text: str, wrapper: str):
+    return f'[{wrapper}]{text}[/{wrapper}]'
 
 
 def warn_unknown_args(unknown_args: List[str]):
@@ -645,16 +769,15 @@ def warn_unknown_args(unknown_args: List[str]):
     :param unknown_args: arguments that are possibly unknown to Jina
     """
 
-    from cli.lookup import _build_lookup_table
+    from jina_cli.lookup import _build_lookup_table
 
     all_args = _build_lookup_table()[0]
-
     has_migration_tip = False
     real_unknown_args = []
     warn_strs = []
     for arg in unknown_args:
         if arg.replace('--', '') not in all_args:
-            from .parsers.deprecated import get_deprecated_replacement
+            from jina.parsers.deprecated import get_deprecated_replacement
 
             new_arg = get_deprecated_replacement(arg)
             if new_arg:
@@ -681,7 +804,8 @@ class ArgNamespace:
         :return: argument list
         """
         args = []
-        from .executors import BaseExecutor
+        from jina.serve.executors import BaseExecutor
+        from jina.serve.runtimes.gateway.gateway import BaseGateway
 
         for k, v in kwargs.items():
             k = k.replace('_', '-')
@@ -695,6 +819,8 @@ class ArgNamespace:
                     args.extend([f'--{k}', json.dumps(v)])
                 elif isinstance(v, type) and issubclass(v, BaseExecutor):
                     args.extend([f'--{k}', v.__name__])
+                elif isinstance(v, type) and issubclass(v, BaseGateway):
+                    args.extend([f'--{k}', v.__name__])
                 else:
                     args.extend([f'--{k}', str(v)])
         return args
@@ -704,7 +830,8 @@ class ArgNamespace:
         kwargs: Dict[str, Union[str, int, bool]],
         parser: ArgumentParser,
         warn_unknown: bool = False,
-        fallback_parsers: List[ArgumentParser] = None,
+        fallback_parsers: Optional[List[ArgumentParser]] = None,
+        positional_args: Optional[Tuple[str, ...]] = None,
     ) -> Namespace:
         """
         Convert dict to a namespace.
@@ -713,10 +840,16 @@ class ArgNamespace:
         :param parser: the parser for building kwargs into a namespace
         :param warn_unknown: True, if unknown arguments should be logged
         :param fallback_parsers: a list of parsers to help resolving the args
+        :param positional_args: some parser requires positional arguments to be presented
         :return: argument list
         """
         args = ArgNamespace.kwargs2list(kwargs)
+        if positional_args:
+            args += positional_args
         p_args, unknown_args = parser.parse_known_args(args)
+        unknown_args = list(filter(lambda x: x.startswith('--'), unknown_args))
+        if '--jcloud' in unknown_args:
+            unknown_args.remove('--jcloud')
         if warn_unknown and unknown_args:
             _leftovers = set(unknown_args)
             if fallback_parsers:
@@ -758,24 +891,23 @@ class ArgNamespace:
         """Convert argparse.Namespace to dict to be uploaded via REST.
 
         :param args: namespace or dict or namespace to dict.
-        :return: pea args
+        :return: pod args
         """
         if isinstance(args, Namespace):
             return vars(args)
         elif isinstance(args, dict):
-            pea_args = {}
+            pod_args = {}
             for k, v in args.items():
                 if isinstance(v, Namespace):
-                    pea_args[k] = vars(v)
+                    pod_args[k] = vars(v)
                 elif isinstance(v, list):
-                    pea_args[k] = [vars(_) for _ in v]
+                    pod_args[k] = [vars(_) for _ in v]
                 else:
-                    pea_args[k] = v
-            return pea_args
+                    pod_args[k] = v
+            return pod_args
 
 
 def is_valid_local_config_source(path: str) -> bool:
-    # TODO: this function must be refactored before 1.0 (Han 12.22)
     """
     Check if the path is valid.
 
@@ -783,7 +915,7 @@ def is_valid_local_config_source(path: str) -> bool:
     :return: True if the path is valid else False.
     """
     try:
-        from .jaml import parse_config_source
+        from jina.jaml import parse_config_source
 
         parse_config_source(path)
         return True
@@ -797,29 +929,39 @@ def get_full_version() -> Optional[Tuple[Dict, Dict]]:
 
     :return: Version information and environment variables
     """
-    import os, grpc, zmq, numpy, google.protobuf, yaml, platform
-    from . import (
-        __version__,
-        __proto_version__,
-        __jina_env__,
-        __uptime__,
-        __unset_msg__,
-    )
+    import os
+    import platform
+    from uuid import getnode
+
+    import google.protobuf
+    import grpc
+    import yaml
     from google.protobuf.internal import api_implementation
     from grpc import _grpcio_metadata
+
+    try:
+        from hubble import __version__ as __hubble_version__
+    except:
+        __hubble_version__ = 'not-available'
+    try:
+        from jcloud import __version__ as __jcloud_version__
+    except:
+        __jcloud_version__ = 'not-available'
+
+    from jina import __docarray_version__, __proto_version__, __version__
+    from jina.constants import __jina_env__, __unset_msg__, __uptime__
     from jina.logging.predefined import default_logger
-    from uuid import getnode
 
     try:
 
         info = {
             'jina': __version__,
+            'docarray': __docarray_version__,
+            'jcloud': __jcloud_version__,
+            'jina-hubble-sdk': __hubble_version__,
             'jina-proto': __proto_version__,
-            'jina-vcs-tag': os.environ.get('JINA_VCS_VERSION', __unset_msg__),
-            'libzmq': zmq.zmq_version(),
-            'pyzmq': numpy.__version__,
             'protobuf': google.protobuf.__version__,
-            'proto-backend': api_implementation._default_implementation_type,
+            'proto-backend': api_implementation.Type(),
             'grpcio': getattr(grpc, '__version__', _grpcio_metadata.__version__),
             'pyyaml': yaml.__version__,
             'python': platform.python_version(),
@@ -832,6 +974,8 @@ def get_full_version() -> Optional[Tuple[Dict, Dict]]:
             'session-id': str(random_uuid(use_uuid1=True)),
             'uptime': __uptime__,
             'ci-vendor': get_ci_vendor() or __unset_msg__,
+            'internal': 'jina-ai'
+            in os.getenv('GITHUB_ACTION_REPOSITORY', __unset_msg__),
         }
 
         env_info = {k: os.getenv(k, __unset_msg__) for k in __jina_env__}
@@ -856,17 +1000,22 @@ def format_full_version_info(info: Dict, env_info: Dict) -> str:
     return version_info + '\n' + env_info
 
 
-def _use_uvloop():
-    if 'JINA_DISABLE_UVLOOP' in os.environ:
-        return
-    try:
-        import uvloop
+def _update_policy():
+    if __windows__:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-    except ModuleNotFoundError:
-        warnings.warn(
-            'Install `uvloop` via `pip install "jina[uvloop]"` for better performance.'
-        )
+    elif 'JINA_DISABLE_UVLOOP' in os.environ:
+        return
+    else:
+        try:
+            import uvloop
+
+            if not isinstance(asyncio.get_event_loop_policy(), uvloop.EventLoopPolicy):
+                asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+        except ModuleNotFoundError:
+            warnings.warn(
+                'Install `uvloop` via `pip install "jina[uvloop]"` for better performance.'
+            )
 
 
 def get_or_reuse_loop():
@@ -875,13 +1024,13 @@ def get_or_reuse_loop():
 
     :return: A new eventloop or reuse the current opened eventloop.
     """
+    _update_policy()
     try:
-        loop = asyncio.get_running_loop()
+        loop = asyncio.get_event_loop()
         if loop.is_closed():
             raise RuntimeError
     except RuntimeError:
-        _use_uvloop()
-        # no running event loop
+        # no event loop
         # create a new loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -919,7 +1068,7 @@ class CatchAllCleanupContextManager:
         pass
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is not None:
+        if exc_type:
             self.sub_context.__exit__(exc_type, exc_val, exc_tb)
 
 
@@ -1059,19 +1208,17 @@ def get_public_ip(timeout: float = 0.3):
     :return: Public IP address.
 
     .. warn::
-        Set :param:`timeout` to a large number will block the Flow.
+        Set `timeout` to a large number will block the Flow.
 
     """
     import urllib.request
-
-    results = []
 
     def _get_ip(url):
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req, timeout=timeout) as fp:
-                _ip = fp.read().decode()
-                results.append(_ip)
+                _ip = fp.read().decode().strip()
+                return _ip
 
         except:
             pass  # intentionally ignored, public ip is not showed
@@ -1082,17 +1229,8 @@ def get_public_ip(timeout: float = 0.3):
         'https://checkip.amazonaws.com/',
     ]
 
-    threads = []
-
     for idx, ip in enumerate(ip_server_list):
-        t = threading.Thread(target=_get_ip, args=(ip,))
-        threads.append(t)
-        t.start()
-
-    for t in threads:
-        t.join(timeout)
-
-    for r in results:
+        r = _get_ip(ip)
         if r:
             return r
 
@@ -1131,25 +1269,25 @@ def is_jupyter() -> bool:  # pragma: no cover
         return False  # Other type (?)
 
 
+def iscoroutinefunction(func: Callable):
+    return inspect.iscoroutinefunction(func)
+
+
 def run_async(func, *args, **kwargs):
     """Generalized asyncio.run for jupyter notebook.
 
-    When running inside jupyter, an eventloop is already exist, can't be stopped, can't be killed.
+    When running inside jupyter, an eventloop already exists, can't be stopped, can't be killed.
     Directly calling asyncio.run will fail, as This function cannot be called when another asyncio event loop
     is running in the same thread.
 
     .. see_also:
         https://stackoverflow.com/questions/55409641/asyncio-run-cannot-be-called-from-a-running-event-loop
 
-    call `run_async(my_function, any_event_loop=True, *args, **kwargs)` to enable run with any eventloop
-
     :param func: function to run
     :param args: parameters
     :param kwargs: key-value parameters
     :return: asyncio.run(func)
     """
-
-    any_event_loop = kwargs.pop('any_event_loop', False)
 
     class _RunThread(threading.Thread):
         """Create a running thread when in Jupyter notebook."""
@@ -1166,25 +1304,16 @@ def run_async(func, *args, **kwargs):
     if loop and loop.is_running():
         # eventloop already exist
         # running inside Jupyter
-        if any_event_loop or is_jupyter():
-            thread = _RunThread()
-            thread.start()
-            thread.join()
-            try:
-                return thread.result
-            except AttributeError:
-                from .excepts import BadClient
+        thread = _RunThread()
+        thread.start()
+        thread.join()
+        try:
+            return thread.result
+        except AttributeError:
+            from jina.excepts import BadClient
 
-                raise BadClient(
-                    'something wrong when running the eventloop, result can not be retrieved'
-                )
-        else:
-
-            raise RuntimeError(
-                'you have an eventloop running but not using Jupyter/ipython, '
-                'this may mean you are using Jina with other integration? if so, then you '
-                'may want to use Client/Flow(asyncio=True). If not, then '
-                'please report this issue here: https://github.com/jina-ai/jina'
+            raise BadClient(
+                'something wrong when running the eventloop, result can not be retrieved'
             )
     else:
         return asyncio.run(func(*args, **kwargs))
@@ -1208,7 +1337,10 @@ def is_yaml_filepath(val) -> bool:
     :param val: Path of target file.
     :return: True if the file is YAML else False.
     """
-    r = r'^[/\w\-\_\.]+.ya?ml$'
+    if __windows__:
+        r = r'.*.ya?ml$'  # TODO: might not be exhaustive
+    else:
+        r = r'^[/\w\-\_\.]+.ya?ml$'
     return re.match(r, val.strip()) is not None
 
 
@@ -1239,8 +1371,10 @@ def find_request_binding(target):
     :param target: the target class to check
     :return: a dictionary with key as request type and value as method name
     """
-    import ast, inspect
-    from . import __default_endpoint__
+    import ast
+    import inspect
+
+    from jina.constants import __default_endpoint__
 
     res = {}
 
@@ -1290,26 +1424,24 @@ def dunder_get(_dict: Any, key: str) -> Any:
     except ValueError:
         pass
 
-    from google.protobuf.struct_pb2 import ListValue
-    from google.protobuf.struct_pb2 import Struct
-    from google.protobuf.pyext._message import MessageMapContainer
+    from google.protobuf.struct_pb2 import ListValue, Struct
 
     if isinstance(part1, int):
         result = _dict[part1]
-    elif isinstance(_dict, (Iterable, ListValue)):
-        result = _dict[part1]
-    elif isinstance(_dict, (dict, Struct, MessageMapContainer)):
+    elif isinstance(_dict, (dict, Struct, MutableMapping)):
         if part1 in _dict:
             result = _dict[part1]
         else:
             result = None
+    elif isinstance(_dict, (Iterable, ListValue)):
+        result = _dict[part1]
     else:
         result = getattr(_dict, part1)
 
     return dunder_get(result, part2) if part2 else result
 
 
-if False:
+if TYPE_CHECKING:  # pragma: no cover
     from fastapi import FastAPI
 
 
@@ -1323,7 +1455,6 @@ def extend_rest_interface(app: 'FastAPI') -> 'FastAPI':
     .. code-block:: python
 
         def extend_rest_interface(app: 'FastAPI'):
-
             @app.get('/extension1')
             async def root():
                 return {"message": "Hello World"}
@@ -1334,9 +1465,11 @@ def extend_rest_interface(app: 'FastAPI') -> 'FastAPI':
 
 
 def get_ci_vendor() -> Optional[str]:
-    from jina import __resources_path__
+    from jina.constants import __resources_path__
 
-    with open(os.path.join(__resources_path__, 'ci-vendors.json')) as fp:
+    with open(
+        os.path.join(__resources_path__, 'ci-vendors.json'), encoding='utf-8'
+    ) as fp:
         all_cis = json.load(fp)
         for c in all_cis:
             if isinstance(c['env'], str) and c['env'] in os.environ:
@@ -1349,3 +1482,189 @@ def get_ci_vendor() -> Optional[str]:
                 for k in c['env']:
                     if k in os.environ:
                         return c['constant']
+
+
+def deprecate_by(new_fn):
+    def _f(*args, **kwargs):
+        import inspect
+
+        old_fn_name = inspect.stack()[1][4][0].strip().split("=")[0].strip()
+        warnings.warn(
+            f'`{old_fn_name}` is renamed to `{new_fn.__name__}` with the same usage, please use the latter instead. '
+            f'The old function will be removed soon.',
+            DeprecationWarning,
+        )
+        return new_fn(*args, **kwargs)
+
+    return _f
+
+
+def get_request_header() -> Dict:
+    """Return the header of request.
+
+    :return: request header
+    """
+    metas, envs = get_full_version()
+
+    header = {
+        **{f'jinameta-{k}': str(v) for k, v in metas.items()},
+        **envs,
+    }
+    return header
+
+
+def get_rich_console():
+    """
+    Function to get jina rich default console.
+    :return: rich console
+    """
+    return Console(
+        force_terminal=True if 'PYCHARM_HOSTED' in os.environ else None,
+        color_system=None if 'JINA_LOG_NO_COLOR' in os.environ else 'auto',
+    )
+
+
+from jina.parsers import set_client_cli_parser
+
+__default_port_client__ = 80
+__default_port_tls_client__ = 443
+
+
+def parse_client(kwargs) -> Namespace:
+    """
+    Parse the kwargs for the Client
+
+    :param kwargs: kwargs to be parsed
+
+    :return: parsed argument.
+    """
+    kwargs = _parse_kwargs(kwargs)
+    args = ArgNamespace.kwargs2namespace(
+        kwargs, set_client_cli_parser(), warn_unknown=True
+    )
+
+    if not args.port:
+        args.port = (
+            __default_port_client__ if not args.tls else __default_port_tls_client__
+        )
+
+    return args
+
+
+def _parse_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    if 'host' in kwargs.keys():
+        return_scheme = dict()
+        (
+            kwargs['host'],
+            return_scheme['port'],
+            return_scheme['protocol'],
+            return_scheme['tls'],
+        ) = parse_host_scheme(kwargs['host'])
+
+        for key, value in return_scheme.items():
+            if value:
+                if key in kwargs:
+                    raise ValueError(
+                        f"You can't have two definitions of {key}: you have one in the host scheme and one in the keyword argument"
+                    )
+                elif value:
+                    kwargs[key] = value
+
+    kwargs = _delete_host_slash(kwargs)
+
+    return kwargs
+
+
+def _delete_host_slash(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    if 'host' in kwargs:
+        if kwargs['host'][-1] == '/':
+            kwargs['host'] = kwargs['host'][:-1]
+    return kwargs
+
+
+def parse_host_scheme(host: str) -> Tuple[str, str, str, bool]:
+    scheme, _hostname, port = _parse_url(host)
+
+    tls = None
+    if scheme in ('grpcs', 'https', 'wss'):
+        scheme = scheme[:-1]
+        tls = True
+
+    if scheme == 'ws':
+        scheme = 'websocket'
+
+    return _hostname, port, scheme, tls
+
+
+def _parse_url(host):
+    if '://' in host:
+        scheme, host = host.split('://')
+    else:
+        scheme = None
+
+    if ':' in host:
+        host, port = host.split(':')
+    else:
+        port = None
+
+    return scheme, host, port
+
+
+def _single_port_free(host: str, port: int) -> bool:
+    with socket(AF_INET, SOCK_STREAM) as session:
+        if session.connect_ex((host, port)) == 0:
+            return False
+        else:
+            return True
+
+
+def is_port_free(host: Union[str, List[str]], port: Union[int, List[int]]) -> bool:
+    if isinstance(port, list):
+        if isinstance(host, str):
+            return all([_single_port_free(host, _p) for _p in port])
+        else:
+            return all([all([_single_port_free(_h, _p) for _p in port]) for _h in host])
+    else:
+        if isinstance(host, str):
+            return _single_port_free(host, port)
+        else:
+            return all([_single_port_free(_h, port) for _h in host])
+
+
+def send_telemetry_event(event: str, obj_cls_name: Any, **kwargs) -> None:
+    """Sends in a thread a request with telemetry for a given event
+    :param event: Event leading to the telemetry entry
+    :param obj_cls_name: Class name of the object to be tracked
+    :param kwargs: Extra kwargs to be passed to the data sent
+    """
+
+    if 'JINA_OPTOUT_TELEMETRY' in os.environ:
+        return
+
+    def _telemetry():
+        url = 'https://telemetry.jina.ai/'
+        try:
+            from jina.helper import get_full_version
+
+            metas, _ = get_full_version()
+            data = base64.urlsafe_b64encode(
+                json.dumps(
+                    {**metas, 'event': f'{obj_cls_name}.{event}', **kwargs}
+                ).encode('utf-8')
+            )
+
+            req = urllib.request.Request(
+                url, data=data, headers={'User-Agent': 'Mozilla/5.0'}
+            )
+            urllib.request.urlopen(req)
+
+        except:
+            pass
+
+    threading.Thread(target=_telemetry, daemon=True).start()
+
+
+def is_generator(func):
+    import inspect
+
+    return inspect.isgeneratorfunction(func) or inspect.isasyncgenfunction(func)

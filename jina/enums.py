@@ -16,7 +16,8 @@ To use these enums in YAML config, following the example below:
         parallel_type: any
 """
 
-from enum import Enum, IntEnum, EnumMeta
+from enum import Enum, EnumMeta, Flag, IntEnum
+from typing import List, Union
 
 
 class EnumType(EnumMeta):
@@ -41,10 +42,10 @@ class EnumType(EnumMeta):
         :return: Registered class.
         """
         reg_cls_set = getattr(cls, '_registered_class', set())
-        if cls.__name__ not in reg_cls_set or getattr(cls, 'force_register', False):
+        if cls.__name__ not in reg_cls_set:
             reg_cls_set.add(cls.__name__)
             setattr(cls, '_registered_class', reg_cls_set)
-        from .jaml import JAML
+        from jina.jaml import JAML
 
         JAML.register(cls)
         return cls
@@ -54,7 +55,32 @@ class BetterEnum(IntEnum, metaclass=EnumType):
     """The base class of Enum used in Jina."""
 
     def __str__(self):
+        return self.to_string()
+
+    def to_string(self):
+        """
+        Convert the Enum to string representation
+        :return: the string representation of the enum
+        """
         return self.name
+
+    def __format__(self, format_spec):  # noqa
+        """
+        override format method for python 3.7
+        :parameter format_spec: format_spec
+        :return: format using actual value type unless __str__ has been overridden.
+        """
+        # credit python 3.9 : https://github.com/python/cpython/blob/612019e60e3a5340542122dabbc7ce5a27a8c635/Lib/enum.py#L755
+        # fix to enum BetterEnum not correctly formated
+        str_overridden = type(self).__str__ not in (Enum.__str__, Flag.__str__)
+        if self._member_type_ is object or str_overridden:
+            cls = str
+            val = str(self)
+        # mix-in branch
+        else:
+            cls = self._member_type_
+            val = self._value_
+        return cls.__format__(val, format_spec)
 
     @classmethod
     def from_string(cls, s: str):
@@ -100,15 +126,8 @@ class BetterEnum(IntEnum, metaclass=EnumType):
         return cls.from_string(node.value)
 
 
-class SchedulerType(BetterEnum):
-    """The enum for Scheduler Type."""
-
-    LOAD_BALANCE = 0  #: balance the workload between Peas, faster peas get more work
-    ROUND_ROBIN = 1  # : workload are scheduled round-robin manner to the peas, assuming all peas have uniform processing speed.
-
-
 class PollingType(BetterEnum):
-    """The enum for representing the parallel type of peas in a pod."""
+    """The enum for representing the parallel type of pods in a deployment."""
 
     ANY = 1  #: one of the shards will receive the message
     ALL = 2  #: all shards will receive the message, blocked until all done with the message
@@ -144,84 +163,28 @@ class LogVerbosity(BetterEnum):
     CRITICAL = 50
 
 
-class SocketType(BetterEnum):
-    """Enums for representing the socket type in a pod."""
-
-    PULL_BIND = 0
-    PULL_CONNECT = 1
-    PUSH_BIND = 2
-    PUSH_CONNECT = 3
-    SUB_BIND = 4
-    SUB_CONNECT = 5
-    PUB_BIND = 6
-    PUB_CONNECT = 7
-    PAIR_BIND = 8
-    PAIR_CONNECT = 9
-    ROUTER_BIND = 10
-    DEALER_CONNECT = 11
-    ROUTER_CONNECT = 13
-
-    @property
-    def is_bind(self) -> bool:
-        """
-        Check if this socket is using `bind` protocol.
-
-        :return: True if this socket is using `bind` protocol else False.
-        """
-        return self.value % 2 == 0
-
-    @property
-    def is_receive(self) -> bool:
-        """
-        Check if this socket is used for receiving data.
-
-        :return: True if this socket is used for receiving data else False.
-        """
-        return self.value in {0, 1, 4, 5}
-
-    @property
-    def is_pubsub(self):
-        """
-        Check if this socket is used for publish or subscribe data.
-
-        :return: True if this socket is used for publish or subscribe data else False.
-        """
-        return 4 <= self.value <= 7
-
-    @property
-    def paired(self) -> 'SocketType':
-        """
-        Get the paired SocketType.
-
-        :return: a paired SocketType.
-        """
-        return {
-            SocketType.PULL_BIND: SocketType.PUSH_CONNECT,
-            SocketType.PULL_CONNECT: SocketType.PUSH_BIND,
-            SocketType.SUB_BIND: SocketType.PUB_CONNECT,
-            SocketType.SUB_CONNECT: SocketType.PUB_BIND,
-            SocketType.PAIR_BIND: SocketType.PAIR_CONNECT,
-            SocketType.PUSH_CONNECT: SocketType.PULL_BIND,
-            SocketType.PUSH_BIND: SocketType.PULL_CONNECT,
-            SocketType.PUB_CONNECT: SocketType.SUB_BIND,
-            SocketType.PUB_BIND: SocketType.SUB_CONNECT,
-            SocketType.PAIR_CONNECT: SocketType.PAIR_BIND,
-        }[self]
-
-
 class FlowBuildLevel(BetterEnum):
     """
     The enum for representing a flow's build level.
 
-    Some :class:`jina.flow.Flow` class functions require certain build level to run.
+    Some :class:`jina.orchestrate.flow.Flow` class functions require certain build level to run.
     """
 
     EMPTY = 0  #: Nothing is built
     GRAPH = 1  #: The underlying graph is built, you may visualize the flow
-    RUNNING = 2  #: the graph is started and all pods are running
+    RUNNING = 2  #: the graph is started and all deployment are running
 
 
-class GatewayProtocolType(BetterEnum):
+class DockerNetworkMode(BetterEnum):
+    """Potential forced network modes"""
+
+    AUTO = 0
+    HOST = 1
+    BRIDGE = 2
+    NONE = 3
+
+
+class ProtocolType(BetterEnum):
     """
     Gateway communication protocol
     """
@@ -230,20 +193,28 @@ class GatewayProtocolType(BetterEnum):
     HTTP = 1
     WEBSOCKET = 2
 
-
-class PeaRoleType(BetterEnum):
-    """The enum of a Pea role."""
-
-    SINGLETON = 0
-    HEAD = 1
-    TAIL = 2
-    PARALLEL = 3
+    @classmethod
+    def from_string_list(cls, string_list: List[Union[str, 'ProtocolType']]):
+        """
+        Returns a list of Enums from a list of strings or enums
+        :param string_list: list of strings or enums
+        :return: a list of Enums
+        """
+        return [cls.from_string(s) if isinstance(s, str) else s for s in string_list]
 
 
 class PodRoleType(BetterEnum):
-    """The enum of a Pod role for visualization."""
+    """The enum of a Pod role."""
 
-    POD = 0
+    HEAD = 0
+    WORKER = 1
+    GATEWAY = 2
+
+
+class DeploymentRoleType(BetterEnum):
+    """The enum of a Deploymen role for visualization."""
+
+    DEPLOYMENT = 0
     JOIN = 1
     INSPECT = 2
     GATEWAY = 3
@@ -253,56 +224,11 @@ class PodRoleType(BetterEnum):
     @property
     def is_inspect(self) -> bool:
         """
-        If the role is inspect pod related.
+        If the role is inspect deployment related.
 
-        :return: True if the Pod role is inspect related else False.
+        :return: True if the Deployment role is inspect related else False.
         """
         return self.value in {2, 4}
-
-
-class RequestType(BetterEnum):
-    """The enum of Client mode."""
-
-    DATA = 0
-    CONTROL = 1
-
-
-class CompressAlgo(BetterEnum):
-    """
-    The enum of Compress algorithms.
-
-    .. note::
-        LZ4 requires additional package, to install it use pip install "jina[lz4]"
-
-    .. seealso::
-
-        https://docs.python.org/3/library/archiving.html
-    """
-
-    NONE = 0
-    LZ4 = 1
-    ZLIB = 2
-    GZIP = 3
-    BZ2 = 4
-    LZMA = 5
-
-
-class OnErrorStrategy(BetterEnum):
-    """
-    The level of error handling.
-
-    .. warning::
-        In theory, all methods below do not 100% guarantee the success
-        execution on the sequel flow. If something is wrong in the upstream,
-        it is hard to CARRY this exception and moving forward without ANY
-        side-effect.
-    """
-
-    IGNORE = (
-        0  #: Ignore it, keep running all Drivers & Executors logics in the sequel flow
-    )
-    SKIP_HANDLE = 1  #: Skip all Executors in the sequel, only `pre_hook` and `post_hook` are called
-    THROW_EARLY = 2  #: Immediately throw the exception, the sequel flow will not be running at all
 
 
 class FlowInspectType(BetterEnum):
@@ -310,7 +236,7 @@ class FlowInspectType(BetterEnum):
 
     HANG = 0  # keep them hanging there
     REMOVE = 1  # remove them in the build
-    COLLECT = 2  # spawn a new pod and collect them before build
+    COLLECT = 2  # spawn a new deployment and collect them before build
 
     @property
     def is_keep(self) -> bool:
@@ -322,123 +248,28 @@ class FlowInspectType(BetterEnum):
         return self.value in {0, 2}
 
 
-class RemoteAccessType(BetterEnum):
-    """Remote access type when connect to the host."""
-
-    SSH = 0  # ssh connection
-    JINAD = 1  # using rest api via jinad
-
-
-class BuildTestLevel(BetterEnum):
-    """Test level in :command:`jina hub build`, higher level includes lower levels."""
-
-    NONE = 0  # no build test
-    EXECUTOR = 1  # test at executor level, directly use the config yaml
-    POD_NONDOCKER = 2  # test at pod level, directly use the config yaml
-    POD_DOCKER = 3  # test at pod level but pod --uses the built image
-    FLOW = 4  # test at a simple flow
-
-
 class DataInputType(BetterEnum):
     """Data input type in the request generator."""
 
     AUTO = 0  # auto inference the input type from data (!WARN: could be slow as it relies on try-execept)
     DOCUMENT = 1  # the input is a full document
     CONTENT = 2  # the input is just the content of the document
+    DICT = 3  # the input is a dictionary representing a Document, needed while pydantic model not available
 
 
-class RuntimeBackendType(BetterEnum):
-    """Type of backend in runtime."""
+class WebsocketSubProtocols(str, Enum):
+    """Subprotocol supported with Websocket Gateway"""
 
-    THREAD = 0
-    PROCESS = 1
-
-
-class EmbeddingClsType(BetterEnum):
-    """Enums for representing the type of embeddings supported."""
-
-    DENSE = 0
-    SCIPY_COO = 1
-    SCIPY_CSR = 2
-    SCIPY_BSR = 3
-    SCIPY_CSC = 4
-    TORCH = 5
-    TF = 6
-
-    @property
-    def is_sparse(self) -> bool:
-        """
-        Check if is of sparse type
-
-        :return: True if the type is sparse
-        """
-        return self.value != 0
-
-    @property
-    def is_dense(self) -> bool:
-        """
-        Check if is of dense type
-
-        :return: True if the type is dense
-        """
-        return self.value == 0
-
-    @property
-    def is_scipy(self) -> bool:
-        """
-        Check if is of scipy sparse type
-
-        :return: True is of scipy sparse type
-        """
-        return self.value in [1, 2, 3, 4]
-
-    @property
-    def is_torch(self) -> bool:
-        """
-        Check if is of torch sparse type
-
-        :return: True is of torch sparse type
-        """
-        return self.value == 5
-
-    @property
-    def is_tf(self) -> bool:
-        """
-        Check if is of tf sparse type
-
-        :return: True is of tf sparse type
-        """
-        return self.value == 6
-
-    @property
-    def scipy_cls_type(self) -> str:
-        """
-        Return the specific scipy class type (coo, csr, csc, bsr)
-
-        :return: True is of scipy sparse type
-        """
-        if self.is_scipy:
-            return self.name.split('_')[1].lower()
-
-    @property
-    def is_scipy_stackable(self) -> bool:
-        """
-        Return if the specific scipy class is stackable. (BSR and CSC when stacked are converted into COO)
-
-        :return: True is class is stackable
-        """
-        return self.value in [1, 2]
+    JSON = 'json'
+    BYTES = 'bytes'
 
 
-class RemoteWorkspaceState(str, Enum):
-    """Enum representing state of remote workspace created by JinaD"""
+class ProviderType(BetterEnum):
+    """Provider type."""
 
-    PENDING = 'PENDING'
-    CREATING = 'CREATING'
-    UPDATING = 'UPDATING'
-    ACTIVE = 'ACTIVE'
-    FAILED = 'FAILED'
-    DELETING = 'DELETING'
+    NONE = 0  #: no provider
+    SAGEMAKER = 1  #: AWS SageMaker
+    AZURE = 2 #: AZURE
 
 
 def replace_enum_to_str(obj):

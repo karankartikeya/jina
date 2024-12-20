@@ -2,25 +2,27 @@ def get_full_schema() -> dict:
     """Get full schema
     :return: the full schema for Jina core as a dict.
     """
-    from .. import __version__
-    from ..importer import IMPORTED
-    from .executor import schema_all_executors
-    from .flow import schema_flow
-    from .meta import schema_metas
-    from .pod import schema_pod
+    from jina import __version__
+    from jina.importer import IMPORTED
+    from jina.schemas.deployment import schema_deployment
+    from jina.schemas.executor import schema_all_executors
+    from jina.schemas.flow import schema_flow
+    from jina.schemas.gateway import schema_gateway
+    from jina.schemas.meta import schema_metas
 
     definitions = {}
     for s in [
+        schema_gateway,
         schema_all_executors,
         schema_flow,
         schema_metas,
-        schema_pod,
+        schema_deployment,
         IMPORTED.schema_executors,
     ]:
         definitions.update(s)
 
     return {
-        '$id': f'https://api.jina.ai/schemas/{__version__}.json',
+        '$id': f'https://schemas.jina.ai/schemas/{__version__}.json',
         '$schema': 'http://json-schema.org/draft-07/schema#',
         'description': 'The YAML schema of Jina objects (Flow, Executor).',
         'type': 'object',

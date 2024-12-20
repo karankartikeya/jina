@@ -1,12 +1,10 @@
 !Flow
 version: '1'
 with:
-  read_only: true
   protocol: http
-  expose_crud_endpoints: true
-  port_expose: 45678
-pods:
-  - name: pod1
+  port: 45678
+executors:
+  - name: executor1
     uses: docker://hubpod:test
-  - name: pod2
+  - name: executor2
     uses: docker://hubpod:test

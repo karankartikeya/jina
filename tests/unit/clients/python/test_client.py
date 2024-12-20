@@ -4,15 +4,11 @@ import time
 import pytest
 import requests
 
-from jina import Executor, DocumentArray, requests as req
-from jina import Flow
-from jina import helper, Document
+from jina import Deployment, Executor, Flow, helper
+from jina import requests as req
 from jina.clients import Client
-from jina.excepts import BadClientInput
+from jina.orchestrate.pods.factory import PodFactory
 from jina.parsers import set_gateway_parser
-from jina.peapods import Pea
-from jina.proto.jina_pb2 import DocumentProto
-from jina.types.document.generators import from_csv, from_ndjson, from_files
 from tests import random_docs
 
 cur_dir = os.path.dirname(os.path.abspath(__file__))
@@ -44,91 +40,41 @@ def test_img_2():
 
 
 @pytest.mark.parametrize(
-    'inputs', [iter([b'1234', b'45467']), iter([DocumentProto(), DocumentProto()])]
-)
-def test_check_input_success(inputs):
-    client = Client(host='localhost', port_expose=12345)
-    client.check_input(inputs)
-
-
-@pytest.mark.parametrize(
-    'inputs', [iter([list(), list(), [12, 2, 3]]), iter([set(), set()])]
-)
-def test_check_input_fail(inputs):
-    client = Client(host='localhost', port_expose=12345)
-    with pytest.raises(BadClientInput):
-        client.check_input(inputs)
-
-
-@pytest.mark.parametrize(
-    'port_expose, route, status_code',
+    'port, route, status_code',
     [(helper.random_port(), '/status', 200), (helper.random_port(), '/api/ass', 404)],
 )
-def test_gateway_ready(port_expose, route, status_code):
+def test_gateway_ready(port, route, status_code):
     p = set_gateway_parser().parse_args(
-        ['--port-expose', str(port_expose), '--protocol', 'http']
+        [
+            '--port',
+            str(port),
+            '--protocol',
+            'http',
+            '--graph-description',
+            '{}',
+            '--deployments-addresses',
+            '{}',
+        ]
     )
-    with Pea(p):
+    with PodFactory.build_pod(p):
         time.sleep(0.5)
-        a = requests.get(f'http://localhost:{p.port_expose}{route}')
-        assert a.status_code == status_code
+        a = requests.get(f'http://localhost:{port}{route}')
+    assert a.status_code == status_code
 
 
 def test_gateway_index(flow_with_http, test_img_1, test_img_2):
     with flow_with_http:
         time.sleep(0.5)
         r = requests.post(
-            f'http://localhost:{flow_with_http.port_expose}/index',
-            json={'data': [test_img_1, test_img_2]},
+            f'http://localhost:{flow_with_http.port}/index',
+            json={'data': {'docs': [{'uri': test_img_1}, {'uri': test_img_2}]}},
         )
-        assert r.status_code == 200
-        resp = r.json()
-        assert 'data' in resp
-        assert len(resp['data']['docs']) == 2
-        assert resp['data']['docs'][0]['uri'] == test_img_1
 
-
-@pytest.mark.slow
-@pytest.mark.parametrize('protocol', ['websocket', 'grpc', 'http'])
-def test_mime_type(protocol):
-    class MyExec(Executor):
-        @req
-        def foo(self, docs: 'DocumentArray', **kwargs):
-            for d in docs:
-                d.convert_uri_to_buffer()
-
-    f = Flow(protocol=protocol).add(uses=MyExec)
-
-    def validate_mime_type(req):
-        for d in req.data.docs:
-            assert d.mime_type == 'text/x-python'
-
-    with f:
-        f.index(from_files('*.py'), validate_mime_type)
-
-
-@pytest.mark.slow
-@pytest.mark.parametrize('func_name', ['index', 'search'])
-@pytest.mark.parametrize('protocol', ['websocket', 'grpc', 'http'])
-def test_client_ndjson(protocol, mocker, func_name):
-    with Flow(protocol=protocol).add() as f, open(
-        os.path.join(cur_dir, 'docs.jsonlines')
-    ) as fp:
-        mock = mocker.Mock()
-        getattr(f, f'{func_name}')(from_ndjson(fp), on_done=mock)
-        mock.assert_called_once()
-
-
-@pytest.mark.slow
-@pytest.mark.parametrize('func_name', ['index', 'search'])
-@pytest.mark.parametrize('protocol', ['websocket', 'grpc', 'http'])
-def test_client_csv(protocol, mocker, func_name):
-    with Flow(protocol=protocol).add() as f, open(
-        os.path.join(cur_dir, 'docs.csv')
-    ) as fp:
-        mock = mocker.Mock()
-        getattr(f, f'{func_name}')(from_csv(fp), on_done=mock)
-        mock.assert_called_once()
+    assert r.status_code == 200
+    resp = r.json()
+    assert 'data' in resp
+    assert len(resp['data']) == 2
+    assert resp['data'][0]['uri'] == test_img_1
 
 
 # Timeout is necessary to fail in case of hanging client requests
@@ -138,7 +84,7 @@ def test_client_websocket(mocker, flow_with_websocket):
         time.sleep(0.5)
         client = Client(
             host='localhost',
-            port_expose=str(flow_with_websocket.port_expose),
+            port=str(flow_with_websocket.port),
             protocol='websocket',
         )
         # Test that a regular index request triggers the correct callbacks
@@ -152,6 +98,7 @@ def test_client_websocket(mocker, flow_with_websocket):
             on_always=on_always_mock,
             on_error=on_error_mock,
             on_done=on_done_mock,
+            return_responses=True,
         )
         on_always_mock.assert_called_once()
         on_done_mock.assert_called_once()
@@ -160,27 +107,31 @@ def test_client_websocket(mocker, flow_with_websocket):
 
 @pytest.mark.parametrize('protocol', ['websocket', 'grpc', 'http'])
 def test_client_from_kwargs(protocol):
-    Client(port_expose=12345, host='0.0.0.1', protocol=protocol)
+    Client(port=12345, host='0.0.0.1', protocol=protocol)
 
 
 @pytest.mark.parametrize('protocol', ['websocket', 'grpc', 'http'])
 def test_independent_client(protocol):
     with Flow(protocol=protocol) as f:
-        c = Client(host='localhost', port_expose=f.port_expose, protocol=protocol)
+        c = Client(
+            host='localhost',
+            port=f.port,
+            protocol=protocol,
+        )
         assert type(c) == type(f.client)
         c.post('/')
 
 
+class MyExec(Executor):
+    @req
+    def foo(self, docs, **kwargs):
+        pass
+
+
 @pytest.mark.slow
-@pytest.mark.parametrize('protocol', ['http', 'grpc', 'websocket'])
-def test_all_sync_clients(protocol, mocker):
-    from jina import requests
-
-    class MyExec(Executor):
-        @requests
-        def foo(self, docs, **kwargs):
-            pass
-
+@pytest.mark.parametrize('protocol', ['http', 'websocket', 'grpc'])
+@pytest.mark.parametrize('use_stream', [True, False])
+def test_all_sync_clients(protocol, mocker, use_stream):
     f = Flow(protocol=protocol).add(uses=MyExec)
     docs = list(random_docs(1000))
     m1 = mocker.Mock()
@@ -188,10 +139,43 @@ def test_all_sync_clients(protocol, mocker):
     m3 = mocker.Mock()
     m4 = mocker.Mock()
     with f:
-        f.post('/', on_done=m1)
-        f.post('/foo', docs, on_done=m2)
-        f.post('/foo', on_done=m3)
-        f.post('/foo', docs, parameters={'hello': 'world'}, on_done=m4)
+        c = Client(
+            host='localhost',
+            port=f.port,
+            protocol=protocol,
+        )
+        c.post('/', on_done=m1, stream=use_stream)
+        c.post('/foo', docs, on_done=m2, stream=use_stream)
+        c.post('/foo', on_done=m3, stream=use_stream)
+        c.post(
+            '/foo', docs, parameters={'hello': 'world'}, on_done=m4, stream=use_stream
+        )
+
+    m1.assert_called_once()
+    m2.assert_called()
+    m3.assert_called_once()
+    m4.assert_called()
+
+@pytest.mark.slow
+@pytest.mark.parametrize('use_stream', [True, False])
+def test_deployment_sync_client(mocker, use_stream):
+    dep = Deployment(uses=MyExec)
+    docs = list(random_docs(1000))
+    m1 = mocker.Mock()
+    m2 = mocker.Mock()
+    m3 = mocker.Mock()
+    m4 = mocker.Mock()
+    with dep:
+        c = Client(
+            host='localhost',
+            port=dep.port,
+        )
+        c.post('/', on_done=m1, stream=use_stream)
+        c.post('/foo', docs, on_done=m2, stream=use_stream)
+        c.post('/foo', on_done=m3, stream=use_stream)
+        c.post(
+            '/foo', docs, parameters={'hello': 'world'}, on_done=m4, stream=use_stream
+        )
 
     m1.assert_called_once()
     m2.assert_called()

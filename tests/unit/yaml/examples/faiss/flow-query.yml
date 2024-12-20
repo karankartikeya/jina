@@ -2,15 +2,15 @@
 version: '1'
 with:
   read_only: true
-pods:
+executors:
   - name: crafter
-    parallel: 4
+    shards: 4
   - name: encoder
-    parallel: 4
+    shards: 4
   - name: faiss_indexer
-    parallel: 1
+    shards: 1
     timeout_ready: 10000
     volumes: './workspace'
   - name: ranker
   - name: doc_indexer
-    parallel: 1
+    shards: 1

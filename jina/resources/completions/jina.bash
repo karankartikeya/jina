@@ -21,5 +21,6 @@ complete -F _jina jina
 # session-wise fix
 ulimit -n 4096
 export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
+# default workspace for Executors
 
 # JINA_CLI_END
